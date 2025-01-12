@@ -38,24 +38,27 @@ def extract_functions(file_content: str) -> List[ast.FunctionDef]:
 # Function to get the source code of a function
 def get_function_source(func: ast.FunctionDef, file_content: str) -> str:
     lines = file_content.splitlines()
-    import_lines = [line for line in lines if line.strip().startswith(('import ', 'from '))]
-    function_source = "\n".join(lines[func.lineno - 1:func.end_lineno])
-    return "\n".join(import_lines + [""] + [function_source])
+    return "\n".join(lines[func.lineno - 1:func.end_lineno])
 
 
 # Function to optimize a Python function using ChatGPT
 def optimize_function(function_code: str) -> str:
     prompt = (
-        f"Here is a Python function. Please reduce its size while maintaining its functionality. Return the optimized code only. Give me only the code nothing else.:\n\n"
+        f"Here is a Python function. Please reduce its size while maintaining its functionality. Return the optimized code only. Give me only the code nothing else. Dont add imports.Keep same function name. Do not use different libraries. Return as code block.:\n\n"
         f"{function_code}"
     )
     optimized_code = chat_gpt(prompt)
     lines = optimized_code.splitlines()
-    if len(lines) > 2:
+    if "```" in optimized_code:
         return "\n".join(lines[1:-1])
     else:
-        return ""
+        return optimized_code
 
+
+def create_directory_copy(source: str, destination: str):
+    if os.path.exists(destination):
+        shutil.rmtree(destination)
+    shutil.copytree(source, destination)
 
 def test_function(original_code: str, optimized_code: str):
     prompt_input = (
@@ -75,8 +78,6 @@ def test_function(original_code: str, optimized_code: str):
     response = chat_gpt(prompt_input)
     lines = response.split("\n")
     inputs = []
-
-    print(original_code)
 
     for line in lines:
         if line.startswith("-"):
@@ -111,33 +112,14 @@ total_original_lines = 0
 total_optimized_lines = 0
 
 
-# Updated function to save optimized files and update line counts
-def save_optimized_file(original_path: str, dest_root: str, imports: str, optimized_functions: str):
+def process_directory(directory: str, dest_root: str):
     global total_original_lines, total_optimized_lines
 
-    # Count lines in the original file
-    with open(original_path, "r") as f:
-        original_lines = f.read().splitlines()
-        total_original_lines += len(original_lines)
-
-    # Count lines in the optimized content
-    optimized_lines = (imports + "\n" + optimized_functions).splitlines()
-    total_optimized_lines += len(optimized_lines)
-
-    # Save the optimized file
-    relative_path = os.path.relpath(original_path, start=os.path.dirname(directory_to_analyze))
-    dest_path = os.path.join(dest_root, relative_path)
-    os.makedirs(os.path.dirname(dest_path), exist_ok=True)
-    with open(dest_path, "w") as f:
-        f.write(imports + "\n" + optimized_functions)
-
-
-def process_directory(directory: str, dest_root: str):
     for root, _, files in os.walk(directory):
         for file in files:
             if file.endswith(".py"):
                 file_path = os.path.join(root, file)
-                print(f"Processing file: {file_path}")
+                optimized_file_path = os.path.join(dest_root, os.sep.join(root.split(os.sep)[1:]), file)
 
                 with open(file_path, "r") as f:
                     file_content = f.read()
@@ -147,30 +129,39 @@ def process_directory(directory: str, dest_root: str):
                                 line.strip().startswith(('import ', 'from '))]
                 functions = extract_functions(file_content)
 
-                optimized_functions = []
                 for func in functions:
                     original_code = get_function_source(func, file_content)
                     optimized_code = optimize_function(original_code)
-                    if test_function(original_code, optimized_code):
+
+                    # Update line counts
+                    original_line_count = len(original_code.splitlines())
+                    optimized_line_count = len(optimized_code.splitlines())
+                    total_original_lines += original_line_count
+                    total_optimized_lines += optimized_line_count
+
+                    if test_function("\n".join(import_lines) + "\n" + original_code,
+                                     "\n".join(import_lines) + "\n" + optimized_code):
                         print(f"Function {func.name} optimized successfully.")
-                        print(optimized_code)
-                        optimized_functions.append(optimized_code)
+                        with open(optimized_file_path, 'r') as opt_file:
+                            file_content1 = opt_file.read()
+
+                        file_content1 = file_content1.replace(original_code, optimized_code)
+
+                        # Write the updated content back to the file
+                        with open(optimized_file_path, 'w') as opt_file:
+                            opt_file.write(file_content1)
                     else:
                         print(f"Function {func.name} optimization failed. Keeping the original code.")
-                        optimized_functions.append(original_code)
-
-                # Combine imports and optimized functions
-                optimized_functions_str = "\n\n".join(optimized_functions)
-                save_optimized_file(file_path, dest_root, "\n".join(import_lines), optimized_functions_str)
 
 
 # Main function updated to print line count summary
 if __name__ == "__main__":
     directory_to_analyze = "TestFolder"
     output_directory = "OptimizedFolder"
-    os.mkdir(output_directory)
+    create_directory_copy(directory_to_analyze, output_directory)
 
     process_directory(directory_to_analyze, output_directory)
+
 
     print(f"Total ChatGPT tokens used: {total_chat_gpt_tokens_used}")
     print(f"Original total lines of code: {total_original_lines}")
